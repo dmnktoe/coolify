@@ -125,6 +125,78 @@ describe('InfisicalService', function () {
             && $request['expandSecretReferences'] === 'true');
     });
 
+    test('merges imported secrets with the folder winning over imports', function () {
+        Http::fake([
+            'https://example.com/infisical/api/v1/auth/universal-auth/login' => Http::response([
+                'accessToken' => 'short-lived-token',
+            ]),
+            'https://example.com/infisical/api/v4/secrets*' => Http::response([
+                'secrets' => [
+                    ['secretKey' => 'APP_KEY', 'secretValue' => 'from-folder'],
+                    ['secretKey' => 'SHARED_URL', 'secretValue' => 'folder-override'],
+                ],
+                'imports' => [
+                    [
+                        'secretPath' => '/shared/public',
+                        'environment' => 'prod',
+                        'secrets' => [
+                            ['secretKey' => 'SHARED_URL', 'secretValue' => 'from-public'],
+                            ['secretKey' => 'PUBLIC_KEY', 'secretValue' => 'from-public'],
+                        ],
+                    ],
+                    [
+                        'secretPath' => '/shared/server',
+                        'environment' => 'prod',
+                        'secrets' => [
+                            ['secretKey' => 'PUBLIC_KEY', 'secretValue' => 'from-server'],
+                            ['secretKey' => 'DATABASE_URL', 'secretValue' => 'postgres://db'],
+                        ],
+                    ],
+                ],
+            ]),
+        ]);
+
+        $service = new InfisicalService('https://example.com/infisical', 'client-id', 'client-secret');
+
+        expect($service->fetchSecrets('project-1', 'prod', '/apps/api'))->toBe([
+            'SHARED_URL' => 'folder-override',
+            'PUBLIC_KEY' => 'from-server',
+            'DATABASE_URL' => 'postgres://db',
+            'APP_KEY' => 'from-folder',
+        ]);
+
+        Http::assertSent(fn ($request) => str_contains($request->url(), '/api/v4/secrets')
+            && $request['includeImports'] === 'true');
+    });
+
+    test('requests imports from the v3 raw endpoint', function () {
+        Http::fake([
+            'https://example.com/infisical/api/v1/auth/universal-auth/login' => Http::response([
+                'accessToken' => 'short-lived-token',
+            ]),
+            'https://example.com/infisical/api/v4/secrets*' => Http::response([], 404),
+            'https://example.com/infisical/api/v3/secrets/raw*' => Http::response([
+                'secrets' => [],
+                'imports' => [
+                    [
+                        'secretPath' => '/shared',
+                        'environment' => 'prod',
+                        'secrets' => [
+                            ['secretKey' => 'IMPORTED_KEY', 'secretValue' => 'imported-value'],
+                        ],
+                    ],
+                ],
+            ]),
+        ]);
+
+        $service = new InfisicalService('https://example.com/infisical', 'client-id', 'client-secret');
+
+        expect($service->fetchSecrets('project-1', 'prod'))->toBe(['IMPORTED_KEY' => 'imported-value']);
+
+        Http::assertSent(fn ($request) => str_contains($request->url(), '/api/v3/secrets/raw')
+            && $request['include_imports'] === 'true');
+    });
+
     test('throws when the login fails', function () {
         Http::fake([
             'https://example.com/infisical/api/v1/auth/universal-auth/login' => Http::response([

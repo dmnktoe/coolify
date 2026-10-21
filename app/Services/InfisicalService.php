@@ -46,6 +46,7 @@ class InfisicalService
             'projectId' => $projectId,
             'environment' => $environment,
             'secretPath' => $secretPath,
+            'includeImports' => 'true',
             ...$valueOptions,
         ]);
 
@@ -55,6 +56,7 @@ class InfisicalService
                 'workspaceId' => $projectId,
                 'environment' => $environment,
                 'secretPath' => $secretPath,
+                'include_imports' => 'true',
                 ...$valueOptions,
             ]);
         }
@@ -63,7 +65,11 @@ class InfisicalService
             throw new \RuntimeException('Infisical API error: '.($response->json('message') ?? 'HTTP '.$response->status()));
         }
 
-        return collect($response->json('secrets', []))
+        // Same precedence as the Infisical CLI: later imports override earlier ones,
+        // and secrets defined in the folder itself override every import.
+        return collect($response->json('imports', []))
+            ->flatMap(fn ($import) => data_get($import, 'secrets', []))
+            ->concat($response->json('secrets', []))
             ->mapWithKeys(fn ($secret) => [(string) data_get($secret, 'secretKey') => (string) data_get($secret, 'secretValue', '')])
             ->all();
     }
